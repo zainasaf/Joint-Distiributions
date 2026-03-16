@@ -1,0 +1,563 @@
+---
+title: "Rake Weighting"
+date: "2025-11-26"
+output: html_document
+---
+
+```{r}
+
+library(tidyverse)
+library(here)
+library(srvyr)
+library(purrr)
+library(forcats)
+library(anesrake)
+
+options(scipen = 999)
+
+## harmonize poll data with the cnesus variables
+
+data <- read_csv(here("Data and script", "data", "data", "resegmentation.csv"))
+#data <- read_csv(here( "data", "data", "resegmentation.csv"))
+
+
+
+
+data <- data %>%
+  mutate(
+    ethnicity = case_when(
+      ethnicity == "White (British/Irish/Other)" ~ "White",
+      ethnicity == "Black/Black British" ~ "Black",
+      ethnicity == "Asian/Asian British" ~ "Asian",
+      ethnicity == "Mixed descent (e.g. White & Asian, White & Black)" ~ "Mixed",
+      ethnicity == "Other" ~ "Other",
+      TRUE ~ NA_character_
+    ), 
+    education = case_when(
+     education %in% c(
+    "University Education Completed (First Degree e.g. BA, BSc)",
+    "Postgraduate Education Completed (e.g. Masters)",
+    "Doctorate, Post-doctorate or equivalent (Higher Degree)"
+  ) ~ "University",
+    education %in% c(
+    "Incomplete Secondary Education (Below GCSE/O Level)",
+    "Secondary Education Completed (GCSE/O Level/CSE or equivalent)",  
+    "Secondary Education Completed (A Level or equivalent)"
+  ) ~ "Secondary",
+     education %in% c(
+    "Vocational or Technical Qualifications Completed (e.g. HND, NVQ)",
+    "Some Vocational or Technical Qualifications"
+  ) ~ "Vocational",
+  education == "Prefer not to answer" ~ NA_character_,  # Added this
+  TRUE ~ NA_character_
+),
+degree = case_when(education == "University" ~ "Degree", 
+                   education %in% c("Secondary", "Vocational") ~ "No Degree", 
+                   TRUE ~ NA_character_),
+    seg = case_when(
+      seg %in% c(
+        "DE Semi or unskilled manual work",
+        "C2 - Skilled manual worker (e.g. skilled bricklayer, carpenter, electrician, plumber, painter, bus/ambulance driver, HGV/train driver, AA patrolman, mechanic)"
+      ) ~ "Semi or unskilled manual work",
+      seg %in% c(
+        "C1 - Supervisory or clerical/junior managerial/professional/administrative (e.g. office worker, student doctor, foreman with 25+ employees, salesperson, policeman, nurse, secretary, self-employed)",
+        "B - Intermediate managerial/professional/administrative (e.g. newly qualified (under 3 years) doctor, solicitor, board director in a small organisation, middle manager in a large organisation, principal officer in the civil service/local government, teacher)",
+        "Retired"
+      ) ~ "Supervisory or clerical/junior managerial/professional/administrative",
+      seg %in% c(
+        "Intermediate managerial/professional/administrative",
+        "A - Higher managerial/professional/administrative (e.g. established doctor, solicitor, board director in a large organisation (200+ employees), top level civil servant/public service employee)"
+      ) ~ "Intermediate managerial/professional/administrative",
+      seg == "Higher managerial/professional/administrative" ~ "Higher managerial/professional/administrative",
+      seg == "Full time education/student" ~ "Full time education/Student",
+      seg %in% c("Unemployed", "Looking after home or family", "Prefer not to say") ~ NA_character_,
+      TRUE ~ NA_character_
+    ), 
+    religion = case_when(
+      grepl("^Christian", religion) ~ "Christian", 
+      grepl("Any other", religion) ~ "Other religion", 
+      religion == "Prefer not to say" ~ "Not answered", 
+      TRUE ~ religion
+    ),  
+    welshlang = case_when(
+      welshlang == "I can speak Welsh" ~ "Can speak Welsh", 
+      welshlang %in% c("I cannot speak Welsh but I can understand, read or write Welsh", 
+                       "I can't speak, understand, read or write Welsh") ~ "Cannot speak Welsh", 
+      TRUE ~ NA_character_
+    )
+  )
+
+##data_small <- data %>%
+##  select(borninuk, cid, seg, region, ethnicity, age_grouped, religion, gender, degree, education, welshlang, UKNatRepWeight) %>%
+##  filter(if_all(everything(), ~ !is.na(.))) %>% 
+##  rename(sex = gender, 
+  ##       age_group = age_grouped,
+    ##     socio_econ = seg)
+
+
+
+data_small <- data %>%
+  select(borninuk, cid, seg, region, ethnicity, age_grouped, religion, gender, degree, education, degree, welshlang, UKNatRepWeight) %>%
+  rename(sex = gender, 
+         age_group = age_grouped,
+         socio_econ = seg)
+
+
+## wighting the data 
+
+poll_svy <- data_small %>%
+  as_survey_design(ids = 1, weights = UKNatRepWeight)
+
+```
+
+
+
+```{r}
+
+## recode cnesus values to haromize with  poll data 
+
+recode_census <- function(x, ...){
+  #   if("degree" %in% names(x)){
+  #   x <- x %>% 
+  #     mutate(degree = case_when(
+  #       degree == "No Degree" ~ "No degree", 
+  #       TRUE ~ degree
+  #     ))
+  # }
+  
+    if("education" %in% names(x)){
+      x <- x %>% 
+      mutate(education = case_when(
+        education %in% c(
+          "Incomplete Secondary Education (Below GCSE /O Level)",
+          "Secondary Education Completed (GCSE /O Level /CSE or equivalent)",
+          "Secondary Education Completed (A Level or equivalent)"
+        ) ~ "Secondary",
+        education == "Vocational or Technical Qualifications Completed (e.g. HND, NVQ)" ~ "Vocational",
+        education == "University Education Completed (First Degree e.g. BA, BSc)" ~ "University",
+        TRUE ~ education  # Keep original value instead of NA
+    ), 
+    degree = case_when(
+      education == "University" ~ "Degree", 
+      education %in% c("Secondary", "Vocational") ~ "No Degree", 
+      TRUE ~ NA_character_
+    ))
+    }
+  if("socio_econ" %in% names(x)){
+    x <- x %>% 
+      mutate(socio_econ = case_when(
+        socio_econ == "Intermediate managerial/ professional/ administrative"  ~ "Intermediate managerial/professional/administrative", 
+        socio_econ == "Supervisory or clerical/ junior managerial/ professional/ administrative" ~ "Supervisory or clerical/junior managerial/professional/administrative",
+        socio_econ == "Higher managerial/ professional/ administrative" ~ "Supervisory or clerical/junior managerial/professional/administrative", 
+        socio_econ == "Skilled manual work" ~ "Semi or unskilled manual work", 
+        TRUE ~ socio_econ)
+      )
+  }
+  if("religion" %in% names(x)){
+    x <- x %>% 
+      mutate(religion = ifelse(religion == "Does not apply", NA, religion))
+  }
+  if("ctry_birth" %in% names(x)){
+    x <- x %>% rename(borninuk = ctry_birth) %>% 
+      mutate(borninuk = ifelse(borninuk == "Born in UK", "Yes", "No"))
+  }
+  if("sex" %in% names(x)){
+    x <- x %>% 
+      mutate(sex = ifelse(sex == "Total", NA, sex) )  
+  }
+  if("region" %in% names(x)){
+    x <- x %>% 
+      mutate(region = case_when(
+        region == "London" ~ "Greater London", 
+        region == "North East" ~ "North East England", 
+        region == "North West" ~ "North West England",
+        region == "South East" ~ "South East England",
+        region == "South West" ~ "South West England",
+        region == "Yorkshire and The Humber" ~ "Yorkshire and the Humber", 
+        TRUE ~ region
+      ))
+  }
+na.omit(x)
+}
+
+```
+
+
+Pre-process step for the census data that will have degree as well as education. 
+
+```{r}
+cens_files <- list.files("all_census_data",
+                         full.names = TRUE, recursive = TRUE)
+
+for(f in cens_files){
+  cens <- read_csv(f)
+  cens <- recode_census(cens)
+  if(all(c("degree", "education") %in% names(cens))){
+    incl_vars <- intersect(names(cens), names(data_small))
+    incl_vars <- setdiff(incl_vars,"education")
+    cens_degree <- cens %>% 
+      group_by(across(all_of(incl_vars))) %>% 
+      summarise(across(c(n, proportion, percent), sum))
+    newf <- gsub("edu[cation]*", "degree", f)
+    write_csv(cens_degree, newf, append = FALSE)
+  }
+}
+
+
+```
+
+
+
+
+```{r}
+## takes poll data and census file names and computes comparison of disitburiotns - for census and poll data
+
+compare_distributions <- function(sample_data, census_file, write=TRUE, output_file = NULL, output_dir = "output", ...){
+  
+  cens <- read_csv(census_file)
+  cens <- recode_census(cens)
+  
+# Rename 'percent' column to 'proportion' for consistency if it exists
+  if("percent" %in% names(cens)){
+    cens <- cens %>% select(-proportion) %>% rename(proportion = percent)
+  }
+
+  if(all(c("education", "degree") %in% names(cens))){
+    cens <- cens %>% select(-degree)
+  }
+
+  if(inherits(sample_data, "data.frame")){
+    incl_vars <- intersect(names(cens), names(sample_data))
+  }else{
+    incl_vars <- intersect(names(cens), names(sample_data$variables))
+  }
+  cens <- cens %>% 
+  group_by(across(all_of(incl_vars))) %>%
+  summarise(proportion = sum(proportion))
+  
+  
+  ## if data frame it is unweighted 
+  if(inherits(sample_data, "data.frame")){
+    samp <- sample_data %>% 
+      group_by(across(all_of(incl_vars))) %>% 
+      tally() %>% 
+     #  filter(!if_any(all_of(incl_vars), is.na)) %>%  ## check if this is right way to deal with NA 
+      ungroup() %>% 
+      mutate(sample_proportion = n/sum(n)) %>% 
+      select(-n)
+    ## otherwise get the weighted size 
+  }else{
+    samp <- sample_data %>% 
+      group_by(across(all_of(incl_vars))) %>% 
+      survey_tally() %>% 
+      select(-n_se) %>% 
+    # filter(!if_any(all_of(incl_vars), is.na)) %>%  ## this as well 
+      ungroup() %>% 
+      mutate(sample_proportion = n/sum(n)) %>% 
+      select(-n)
+  }
+  
+  out <- left_join(cens, samp) %>% 
+    mutate(sample_proportion = ifelse(is.na(sample_proportion), 0, sample_proportion),
+           # proportion is already in percent, just round it
+           proportion = round(proportion, 2),
+           # sample_proportion needs to be converted to percent
+           sample_proportion = round(sample_proportion * 100, 2),
+           difference = proportion - sample_proportion) %>% 
+    arrange(desc(abs(difference))) %>% 
+    rename(census = proportion, 
+           poll = sample_proportion)
+  
+  if(write){
+    if(is.null(output_file)){
+      fname <- if(grepl("/", census_file, fixed=TRUE)){
+        tail(strsplit(census_file, "/", fixed=TRUE)[[1]], n=1)
+      } else {
+        census_file  # Fixed typo: was "cens_files"
+      }
+      fname <- paste0(output_dir, "/compare_", fname)
+    }else{
+      fname <- paste0(output_dir, "/", output_file)
+    }
+    if(!dir.exists(output_dir)){
+      message("Creating output directory.\n")
+      dir.create(output_dir)
+    }
+    write_csv(out, fname, append = FALSE)
+  }
+  return(out)
+}
+
+
+```
+
+
+```{r}
+
+library(survey)
+## survey deign object everyone same weight i.e. unewighted 
+eqwt_des <- svydesign(id=~1, data = data_small %>% select(-welshlang) %>% as.data.frame(), weights=~1)
+
+```
+
+Select the relevant marginal distributions - is   from the census data
+
+```{r}
+
+##  create marginal distirbutions from census data 
+## for each margin making them sum to sample- marginal distirbution
+## making cnesus data margin - rather than using proportions making the frquency sum to sample size of poll data 
+## makes the raking work more smoothly - easier to caclcualte 
+
+sample_n <- nrow(data_small)
+age_educ <- read_csv (here("Data and script", "all_census_data", "combined_age_education.csv")) %>% recode_census()
+age_educ <- read_csv (here("all_census_data", "combined_age_education.csv")) %>% recode_census()
+age_margin <- age_educ %>% 
+  group_by(age_group) %>% 
+  summarise(n=sum(n)) %>% 
+  ungroup() %>% 
+  mutate(Freq = n/sum(n) * sample_n) %>% 
+  select(-n)
+
+education_margin <- age_educ %>% 
+  group_by(education) %>% 
+  summarise(n=sum(n)) %>% 
+  ungroup() %>% 
+  mutate(Freq = n/sum(n) * sample_n) %>% 
+  select(-n)
+sex_margin <- age_educ %>% 
+  group_by(sex) %>% 
+  summarise(n=sum(n)) %>% 
+  ungroup() %>% 
+  mutate(Freq = n/sum(n) * sample_n) %>% 
+  select(-n)
+
+# eth_occ <- read_csv(here("Data and script", "all_census_data", "combined_age_ethn_occupation.csv")) %>% recode_census()
+eth_occ <- read_csv(here( "all_census_data", "combined_age_ethn_occupation.csv")) %>% recode_census()
+socio_econ_margin <- eth_occ %>% 
+  group_by(socio_econ) %>% 
+  summarise(n=sum(n)) %>% 
+  ungroup() %>% 
+  mutate(Freq = n/sum(n) * sample_n) %>% 
+  select(-n)
+
+ethnicity_margin <- eth_occ %>% 
+  group_by(ethnicity) %>% 
+  summarise(n=sum(n)) %>% 
+  ungroup() %>% 
+  mutate(Freq = n/sum(n) * sample_n) %>% 
+  select(-n)
+
+# born_relig <- read_csv(here("Data and script", "all_census_data", "combined_born_religion.csv")) %>% recode_census()
+born_relig <- read_csv(here( "all_census_data", "combined_born_religion.csv")) %>% recode_census()
+religion_margin <- born_relig %>% 
+  group_by(religion) %>% 
+  summarise(n=sum(n)) %>% 
+  ungroup() %>% 
+  mutate(Freq = n/sum(n) * sample_n) %>% 
+  select(-n)
+
+borninuk_margin <- born_relig %>% 
+  group_by(borninuk) %>% 
+  summarise(n=sum(n)) %>% 
+  ungroup() %>% 
+  mutate(Freq = n/sum(n) * sample_n) %>% 
+  select(-n)
+
+#region_se <- read_csv(here("Data and script", "all_census_data", "combined_region_socio_economic.csv")) %>% recode_census()
+region_se <- read_csv(here("all_census_data", "combined_region_socio_economic.csv")) %>% recode_census()
+region_margin <- region_se %>%
+  group_by(region) %>% 
+  summarise(n=sum(n)) %>% 
+  ungroup() %>% 
+  mutate(Freq = n/sum(n) * sample_n) %>% 
+  select(-n)
+
+age_sex_margin <- age_educ %>% 
+  group_by(age_group, sex) %>% 
+  summarise(n=sum(n)) %>% 
+  ungroup() %>% 
+  mutate(Freq = n/sum(n) * sample_n) %>% 
+  select(-n)
+
+edu_sex_margin <- age_educ %>% 
+  group_by(education, sex) %>% 
+  summarise(n=sum(n)) %>% 
+  ungroup() %>% 
+  mutate(Freq = n/sum(n) * sample_n) %>% 
+  select(-n)
+
+## If you download the born in uk/gender table, you could make a joint distribution out of that. 
+# born_sex <- read_csv(here("Data and script", "all_census_data", "combined_born_sex.csv")) %>% recode_census()
+# # born_sex <- read_csv(here("all_census_data", "combined_born_uk_sex.csv")) %>% recode_census()
+# 
+# bornuk_sex_margin <- age_educ %>% 
+#   group_by(borninuk, sex) %>% 
+#   summarise(n=sum(n)) %>% 
+#   ungroup() %>% 
+#   mutate(Freq = n/sum(n) * sample_n) %>% 
+#   select(-n)
+
+```
+
+Identify the relevant formulas for the sample margins and objects for the population margins. 
+
+
+```{r}
+## set up rake - sammple margians (lsit of formules) 
+
+sample_margins <- list(
+  ~age_group, 
+  ~sex, 
+  ~education, 
+  ~ethnicity, 
+  ~socio_econ, 
+  ~region, 
+  ~religion, 
+  ~borninuk, 
+  ~age_group + sex
+)
+
+## list of data frames 
+pop_margins <- list(
+  age_margin, 
+  sex_margin, 
+  education_margin,
+  ethnicity_margin,
+  socio_econ_margin,
+  region_margin,
+  religion_margin,
+  borninuk_margin,
+  age_sex_margin
+)
+
+##  how people have voted in the last population  - previous election vote in rake 
+
+
+```
+
+Then, do the raking: 
+
+
+```{r}
+## Using anesrake
+targets <- list()
+targets[["age_group"]] <- age_margin$Freq
+names(targets[["age_group"]]) <- age_margin$age_group
+
+targets[["sex"]] <- sex_margin$Freq
+names(targets[["sex"]]) <- sex_margin$sex
+
+targets[["education"]] <- education_margin$Freq
+names(targets[["education"]]) <- education_margin$education
+
+targets[["ethnicity"]] <- ethnicity_margin$Freq
+names(targets[["ethnicity"]]) <- ethnicity_margin$ethnicity
+
+targets[["socio_econ"]] <- socio_econ_margin$Freq
+names(targets[["socio_econ"]]) <- socio_econ_margin$socio_econ
+
+targets[["region"]] <- region_margin$Freq
+names(targets[["region"]]) <- region_margin$region
+
+targets[["religion"]] <- religion_margin$Freq
+names(targets[["religion"]]) <- religion_margin$religion
+
+targets[["borninuk"]] <- borninuk_margin$Freq
+names(targets[["borninuk"]]) <- borninuk_margin$borninuk
+
+age_sex_margin <- age_sex_margin %>% mutate(age_sex = paste(age_group, sex, sep="_"))
+data_small <- data_small %>% mutate(age_sex = paste(age_group, sex, sep="_"))
+
+targets[["age_sex"]] <- age_sex_margin$Freq
+names(targets[["age_sex"]]) <- age_sex_margin$age_sex
+
+targets <- lapply(targets, \(x)x/sum(x))
+
+tmp <- as.data.frame(data_small %>% select(all_of(names(targets))))
+tmp <- tmp %>% mutate(across(everything(), as.factor))
+rakewt <- anesrake(targets, tmp, caseid = data_small$cid, verbose = TRUE, cap=20)
+wtdat <- data.frame(cid = rakewt$caseid, rake_weight_nocap = rakewt$weightvec)
+
+data_small <- left_join(data_small, wtdat)
+```
+
+
+
+
+
+```{r}
+library(srvyr)
+summary(data_small$rake_weight_nocap)
+raw_rake_design <- data_small %>% as_survey_design(weights=rake_weight_nocap)
+
+```
+
+Calculate design effect, this gives you a sense of the effective sample size: $n_{eff} = n / \text{Design Effect}$.
+
+```{r}
+
+# Kish design effect from weights
+
+## effective sample size -  non probability smaple apply apply weights menas 1742 with the ese weights 
+
+deff_wt <- 1 + var(weights(raw_rake_design)) / mean(weights(raw_rake_design))^2
+deff_wt
+effective_n <- nrow(data_small) / deff_wt
+effective_n
+
+
+```
+
+Optionally, trim really big weights
+
+```{r}
+
+## trim weights so not samller than 0.1 and not bigger than 5 - truncate the wegiths to these values 
+
+rakewt <- anesrake(targets, tmp, caseid = data_small$cid, verbose = TRUE, cap=5)
+wtdat2 <- data.frame(cid = rakewt$caseid, rake_weight_trim = rakewt$weightvec)
+
+data_small <- left_join(data_small, wtdat2)
+
+trim_rake_design <- data_small %>% as_survey_design(weights=rake_weight_trim)
+```
+
+You could use these weights for comparisons with the census marginals, too.  They tend to produce distributions that are more faithful, though not perfectly so, to the true census joint distributions.  This isn't particularly surprising given that they are produced from the census targets.  
+
+```{r}
+
+##lf <- list.files("all_census_data", full.names=TRUE, recursive=TRUE)
+
+
+## makes survey design out of trim weights , rake weights and UK nat rep weights 
+## uses them in compare disitbrution - compaing unweighted, nat rep weighted, rake weighted and trim rake weighted
+## to the census distirbutions downlaided
+
+
+# cens_files <- list.files("Data and script/all_census_data", 
+#                          full.names = TRUE, recursive = TRUE)
+
+cens_files <- list.files("all_census_data",
+                         full.names = TRUE, recursive = TRUE)
+
+raw_comparisons <- lapply(cens_files, \(x)compare_distributions(data_small, x, write=FALSE))
+wt_comparisons <- lapply(cens_files, \(x)compare_distributions(poll_svy, x, write=FALSE))
+
+raw_rake_comparisons <- lapply(cens_files, \(x)compare_distributions(raw_rake_design, x, write=FALSE))
+trim_rake_comparisons <- lapply(cens_files, \(x)compare_distributions(trim_rake_design, x, write=FALSE))
+
+wt_comparisons <- lapply(wt_comparisons, \(x)x %>% select(-census) %>% rename(wt_poll = poll, wt_difference = difference))
+raw_rake_comparisons <- lapply(raw_rake_comparisons, \(x)x %>% select(-census) %>% rename(raw_rake_poll = poll, raw_rake_difference = difference))
+trim_rake_comparisons <- lapply(trim_rake_comparisons, \(x)x %>% select(-census) %>% rename(trim_rake_poll = poll, trim_rake_difference = difference))
+
+all_comparisons <- lapply(seq_along(raw_comparisons), \(i){
+  out <- raw_comparisons[[i]] %>%
+    left_join(wt_comparisons[[i]], by=intersect(names(raw_comparisons[[i]]), names(wt_comparisons[[i]]))) %>%
+    left_join(raw_rake_comparisons[[i]], by=intersect(names(raw_comparisons[[i]]), names(raw_rake_comparisons[[i]]))) %>%
+    left_join(trim_rake_comparisons[[i]], by=intersect(names(raw_comparisons[[i]]), names(trim_rake_comparisons[[i]])))
+})
+
+
+```
+
