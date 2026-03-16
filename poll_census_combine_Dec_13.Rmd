@@ -1,0 +1,640 @@
+---
+title: "Untitled"
+output: html_document
+date: "2025-11-25"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+
+library(tidyverse)
+library(here)
+library(srvyr)
+library(purrr)
+library(forcats)
+
+
+options(scipen = 999)
+
+## harmonize poll data with the cnesus variables
+
+data <- read_csv(here("Data and script", "data", "data", "resegmentation.csv"))
+
+
+
+
+data <- data %>%
+  mutate(
+    ethnicity = case_when(
+      ethnicity == "White (British/Irish/Other)" ~ "White",
+      ethnicity == "Black/Black British" ~ "Black",
+      ethnicity == "Asian/Asian British" ~ "Asian",
+      ethnicity == "Mixed descent (e.g. White & Asian, White & Black)" ~ "Mixed",
+      ethnicity == "Other" ~ "Other",
+      TRUE ~ NA_character_
+    ), 
+    education = case_when(
+     education %in% c(
+    "University Education Completed (First Degree e.g. BA, BSc)",
+    "Postgraduate Education Completed (e.g. Masters)",
+    "Doctorate, Post-doctorate or equivalent (Higher Degree)"
+  ) ~ "University",
+    education %in% c(
+    "Incomplete Secondary Education (Below GCSE/O Level)",
+    "Secondary Education Completed (GCSE/O Level/CSE or equivalent)",  
+    "Secondary Education Completed (A Level or equivalent)"
+  ) ~ "Secondary",
+     education %in% c(
+    "Vocational or Technical Qualifications Completed (e.g. HND, NVQ)",
+    "Some Vocational or Technical Qualifications"
+  ) ~ "Vocational",
+  education == "Prefer not to answer" ~ NA_character_,  # Added this
+  TRUE ~ NA_character_
+),
+degree = case_when(education == "University" ~ "Degree", 
+                   education %in% c("Secondary", "Vocational") ~ "No Degree", 
+                   TRUE ~ NA_character_),
+    seg = case_when(
+      seg %in% c(
+        "DE Semi or unskilled manual work",
+        "C2 - Skilled manual worker (e.g. skilled bricklayer, carpenter, electrician, plumber, painter, bus/ambulance driver, HGV/train driver, AA patrolman, mechanic)"
+      ) ~ "Semi or unskilled manual work",
+      seg %in% c(
+        "C1 - Supervisory or clerical/junior managerial/professional/administrative (e.g. office worker, student doctor, foreman with 25+ employees, salesperson, policeman, nurse, secretary, self-employed)",
+        "B - Intermediate managerial/professional/administrative (e.g. newly qualified (under 3 years) doctor, solicitor, board director in a small organisation, middle manager in a large organisation, principal officer in the civil service/local government, teacher)",
+        "Retired"
+      ) ~ "Supervisory or clerical/junior managerial/professional/administrative",
+      seg %in% c(
+        "Intermediate managerial/professional/administrative",
+        "A - Higher managerial/professional/administrative (e.g. established doctor, solicitor, board director in a large organisation (200+ employees), top level civil servant/public service employee)"
+      ) ~ "Intermediate managerial/professional/administrative",
+      seg == "Higher managerial/professional/administrative" ~ "Higher managerial/professional/administrative",
+      seg == "Full time education/student" ~ "Full time education/Student",
+      seg %in% c("Unemployed", "Looking after home or family", "Prefer not to say") ~ NA_character_,
+      TRUE ~ NA_character_
+    ), 
+    religion = case_when(
+      grepl("^Christian", religion) ~ "Christian", 
+      grepl("Any other", religion) ~ "Other religion", 
+      religion == "Prefer not to say" ~ "Not answered", 
+      TRUE ~ religion
+    ),  
+    welshlang = case_when(
+      welshlang == "I can speak Welsh" ~ "Can speak Welsh", 
+      welshlang %in% c("I cannot speak Welsh but I can understand, read or write Welsh", 
+                       "I can't speak, understand, read or write Welsh") ~ "Cannot speak Welsh", 
+      TRUE ~ NA_character_
+    )
+  )
+
+##data_small <- data %>%
+##  select(borninuk, cid, seg, region, ethnicity, age_grouped, religion, gender, degree, education, welshlang, UKNatRepWeight) %>%
+##  filter(if_all(everything(), ~ !is.na(.))) %>% 
+##  rename(sex = gender, 
+  ##       age_group = age_grouped,
+    ##     socio_econ = seg)
+
+
+
+data_small <- data %>%
+  select(borninuk, cid, seg, region, ethnicity, age_grouped, religion, gender, degree, education, degree, welshlang, UKNatRepWeight) %>%
+  rename(sex = gender, 
+         age_group = age_grouped,
+         socio_econ = seg)
+
+
+## wighting the data 
+
+poll_svy <- data_small %>%
+  as_survey_design(ids = 1, weights = UKNatRepWeight)
+
+```
+
+
+
+```{r}
+
+## recode cnesus values to haromize with  poll data 
+
+recode_census <- function(x, ...){
+  #   if("degree" %in% names(x)){
+  #   x <- x %>% 
+  #     mutate(degree = case_when(
+  #       degree == "No Degree" ~ "No degree", 
+  #       TRUE ~ degree
+  #     ))
+  # }
+  
+    if("education" %in% names(x)){
+      x <- x %>% 
+      mutate(education = case_when(
+        education %in% c(
+          "Incomplete Secondary Education (Below GCSE /O Level)",
+          "Secondary Education Completed (GCSE /O Level /CSE or equivalent)",
+          "Secondary Education Completed (A Level or equivalent)"
+        ) ~ "Secondary",
+        education == "Vocational or Technical Qualifications Completed (e.g. HND, NVQ)" ~ "Vocational",
+        education == "University Education Completed (First Degree e.g. BA, BSc)" ~ "University",
+        TRUE ~ education  # Keep original value instead of NA
+    ), 
+    degree = case_when(
+      education == "University" ~ "Degree", 
+      education %in% c("Secondary", "Vocational") ~ "No Degree", 
+      TRUE ~ NA_character_
+    ))
+    }
+  if("socio_econ" %in% names(x)){
+    x <- x %>% 
+      mutate(socio_econ = case_when(
+        socio_econ == "Intermediate managerial/ professional/ administrative"  ~ "Intermediate managerial/professional/administrative", 
+        socio_econ == "Supervisory or clerical/ junior managerial/ professional/ administrative" ~ "Supervisory or clerical/junior managerial/professional/administrative",
+        socio_econ == "Higher managerial/ professional/ administrative" ~ "Supervisory or clerical/junior managerial/professional/administrative", 
+        socio_econ == "Skilled manual work" ~ "Semi or unskilled manual work", 
+        TRUE ~ socio_econ)
+      )
+  }
+  if("religion" %in% names(x)){
+    x <- x %>% 
+      mutate(religion = ifelse(religion == "Does not apply", NA, religion))
+  }
+  if("ctry_birth" %in% names(x)){
+    x <- x %>% rename(borninuk = ctry_birth) %>% 
+      mutate(borninuk = ifelse(borninuk == "Born in UK", "Yes", "No"))
+  }
+  if("sex" %in% names(x)){
+    x <- x %>% 
+      mutate(sex = ifelse(sex == "Total", NA, sex) )  
+  }
+  if("region" %in% names(x)){
+    x <- x %>% 
+      mutate(region = case_when(
+        region == "London" ~ "Greater London", 
+        region == "North East" ~ "North East England", 
+        region == "North West" ~ "North West England",
+        region == "South East" ~ "South East England",
+        region == "South West" ~ "South West England",
+        region == "Yorkshire and The Humber" ~ "Yorkshire and the Humber", 
+        TRUE ~ region
+      ))
+  }
+na.omit(x)
+}
+
+
+```
+
+
+Pre-process step for the census data that will have degree as well as education. 
+
+```{r}
+cens_files <- list.files("Data and script/all_census_data",
+                         full.names = TRUE, recursive = TRUE)
+for(f in cens_files){
+  cens <- read_csv(f)
+  cens <- recode_census(cens)
+  if(all(c("degree", "education") %in% names(cens))){
+    incl_vars <- intersect(names(cens), names(data_small))
+    incl_vars <- setdiff(incl_vars,"education")
+    
+    # Add this: rename percent to proportion if it exists
+    if("percent" %in% names(cens) && !"proportion" %in% names(cens)){
+      cens <- cens %>% rename(proportion = percent)
+    }
+    
+    cens_degree <- cens %>% 
+      group_by(across(all_of(incl_vars))) %>% 
+      summarise(across(c(n, proportion), sum))  # Now just sum n and proportion
+    newf <- gsub("edu[cation]*", "degree", f)
+    write_csv(cens_degree, newf, append = FALSE)
+  }
+}
+
+```
+
+
+
+
+```{r}
+## takes poll data and census file names and computes comparison of disitburiotns - for census and poll data
+
+compare_distributions <- function(sample_data, census_file, write=TRUE, output_file = NULL, output_dir = "output", ...){
+  
+  cens <- read_csv(census_file)
+  cens <- recode_census(cens)
+  
+  # Rename 'percent' column to 'proportion' for consistency if it exists
+  if("percent" %in% names(cens) && !"proportion" %in% names(cens)){
+    cens <- cens %>% rename(proportion = percent)
+  } else if("percent" %in% names(cens) && "proportion" %in% names(cens)){
+    cens <- cens %>% select(-proportion) %>% rename(proportion = percent)
+  }
+  
+  if(all(c("education", "degree") %in% names(cens))){
+    cens <- cens %>% select(-degree)
+  }
+  if(inherits(sample_data, "data.frame")){
+    incl_vars <- intersect(names(cens), names(sample_data))
+  }else{
+    incl_vars <- intersect(names(cens), names(sample_data$variables))
+  }
+  cens <- cens %>% 
+  group_by(across(all_of(incl_vars))) %>%
+  summarise(proportion = sum(proportion))
+  
+  
+  ## if data frame it is unweighted 
+  if(inherits(sample_data, "data.frame")){
+    samp <- sample_data %>% 
+      group_by(across(all_of(incl_vars))) %>% 
+      tally() %>% 
+     #  filter(!if_any(all_of(incl_vars), is.na)) %>%  ## check if this is right way to deal with NA 
+      ungroup() %>% 
+      mutate(sample_proportion = n/sum(n)) %>% 
+      select(-n)
+    ## otherwise get the weighted size 
+  }else{
+    samp <- sample_data %>% 
+      group_by(across(all_of(incl_vars))) %>% 
+      survey_tally() %>% 
+      select(-n_se) %>% 
+    # filter(!if_any(all_of(incl_vars), is.na)) %>%  ## this as well 
+      ungroup() %>% 
+      mutate(sample_proportion = n/sum(n)) %>% 
+      select(-n)
+  }
+  
+  out <- left_join(cens, samp) %>% 
+    mutate(sample_proportion = ifelse(is.na(sample_proportion), 0, sample_proportion),
+           # proportion is already in percent, just round it
+           proportion = round(proportion, 2),
+           # sample_proportion needs to be converted to percent
+           sample_proportion = round(sample_proportion * 100, 2),
+           difference = proportion - sample_proportion) %>% 
+    arrange(desc(abs(difference))) %>% 
+    rename(census = proportion, 
+           poll = sample_proportion)
+  
+  if(write){
+    if(is.null(output_file)){
+      fname <- if(grepl("/", census_file, fixed=TRUE)){
+        tail(strsplit(census_file, "/", fixed=TRUE)[[1]], n=1)
+      } else {
+        census_file
+      }
+      fname <- paste0(output_dir, "/compare_", fname)
+    }else{
+      fname <- paste0(output_dir, "/", output_file)
+    }
+    if(!dir.exists(output_dir)){
+      message("Creating output directory.\n")
+      dir.create(output_dir)
+    }
+    write_csv(out, fname, append = FALSE)
+  }
+  return(out)
+}
+
+
+```
+
+
+## Considering Welsh Language
+
+```{r}
+tab <- table(data_small$age_group, data_small$welshlang)
+# number of observations by age group
+n_age <- rowSums(tab)
+# simulated number of welsh speakers based on sample proportion by age group
+sim_n <- lapply(1:10000, \(i)rbinom(length(n_age), n_age, prob = tab[,1]/n_age))
+## make list into matrix
+sim_n <- do.call(rbind, sim_n)
+
+## simulated proportion of welsh speakers by age group
+sim_p <- apply(sim_n, 1, \(x)x/n_age)
+## 95% lower and upper bounds of proportion of welsh speakers by age group
+cbind(apply(sim_p, 1, \(x)quantile(x, c(.025))), 
+apply(sim_p, 1, \(x)quantile(x, c(.975))))
+
+```
+
+The range on these values is around 15-20 percentage points indicating that the estimate of the proportion of Welsh language speakers from the polling data is really imprecise.  This suggests that there could be meaningful departures of the sample values from the census values simply due to sampling variability alone. 
+
+
+```{r}
+
+
+cens_files <- list.files(here("Data and script", "all_census_data"), 
+                         full.names = TRUE, recursive = TRUE)
+
+for(f in cens_files){
+  cens <- read_csv(f)
+  cens <- recode_census(cens)
+  if(all(c("degree", "education") %in% names(cens))){
+    incl_vars <- intersect(names(cens), names(data_small))
+    incl_vars <- setdiff(incl_vars,"education")
+    
+    if("percent" %in% names(cens) && !"proportion" %in% names(cens)){
+      cens <- cens %>% rename(proportion = percent)
+    }
+    
+    cens_degree <- cens %>% 
+      group_by(across(all_of(incl_vars))) %>% 
+      summarise(across(c("n", "proportion"), sum))
+    
+    newf <- gsub("edu[cation]*", "degree", f)
+    write_csv(cens_degree, newf, append = FALSE)
+  }
+}
+
+# Load census files
+cens_files <- list.files(here("Data and script", "all_census_data"), 
+                         full.names = TRUE, recursive = TRUE)
+
+## Compare each file to data_small - the unweighted data 
+raw_comparisons <- lapply(cens_files, \(x)compare_distributions(data_small, x, write=TRUE))
+
+## Compare census data to poll_svy - the weighted data
+wt_comparisons <- lapply(cens_files, \(x)compare_distributions(poll_svy, x, write=TRUE, output_dir = "wt_output"))
+wt_comparisons <- lapply(wt_comparisons, \(x)x %>% rename(wt_poll = poll, wt_difference = difference))
+
+combined_comparisons <- lapply(seq_along(raw_comparisons), \(i){
+  left_join(raw_comparisons[[i]], wt_comparisons[[i]] %>% select(-census))
+})
+
+## How often does the weighting decrease the absolute difference i.e. improve census match 
+out_comp <- lapply(combined_comparisons, \(x)x %>% ungroup %>% 
+         summarise(wt_better_sum = sum(abs(wt_difference) < abs(difference)), 
+                   n_cells = n(), 
+                   wt_better_prop = mean(abs(wt_difference) < abs(difference))))
+names(out_comp) <- gsub(".*combined_(.*)\\.csv", "\\1", cens_files)
+out_comp
+
+# Create output directories if they don't exist
+if(!dir.exists("output/wt_comparisons")){
+  dir.create("output/wt_comparisons", recursive = TRUE)
+}
+if(!dir.exists("output/raw_comparisons")){
+  dir.create("output/raw_comparisons", recursive = TRUE)
+}
+
+# MODIFIED: Extract demographic names from census filenames
+get_demo_name <- function(filepath) {
+  fname <- basename(filepath)
+  # Remove "combined_" prefix and ".csv" suffix
+  demo_name <- str_remove(fname, "^combined_")
+  demo_name <- str_remove(demo_name, "\\.csv$")
+  return(demo_name)
+}
+
+# Get demographic names for each file
+demo_names <- sapply(cens_files, get_demo_name)
+
+# Write weighted comparisons with demographic names
+for (i in seq_along(wt_comparisons)) {
+  write_csv(wt_comparisons[[i]], 
+            file = paste0("output/wt_comparisons/", demo_names[i], ".csv"))
+}
+
+# Write raw comparisons with demographic names
+for (i in seq_along(raw_comparisons)) {
+  write_csv(raw_comparisons[[i]], 
+            file = paste0("output/raw_comparisons/", demo_names[i], ".csv"))
+}
+
+out_comp_df <- bind_rows(out_comp, .id = "breakdown")
+write_csv(out_comp_df, here("Data and Script", "output", "weighting_performance_summary.csv"))
+
+out_comp_df
+
+
+
+
+
+```
+
+
+
+
+```{r}
+
+
+library(tidyverse)
+library(here)
+library(purrr)
+library(fs)
+
+unw_dir <- here("output", "raw_comparisons")  
+wt_dir  <- here("output", "wt_comparisons")   
+
+read_and_join_pair <- function(fname) {
+  unw <- read_csv(file.path(unw_dir, fname), show_col_types = FALSE) |>
+    rename(diff_unw = difference, poll_unw = poll)
+
+  wt  <- read_csv(file.path(wt_dir, fname), show_col_types = FALSE) |>
+    rename(diff_wt = wt_difference, poll_wt = wt_poll)
+
+  key_cols <- setdiff(names(unw), c("census", "poll_unw", "diff_unw"))
+
+  joined <- unw |>
+    select(all_of(key_cols), census, poll_unw, diff_unw) |>
+    inner_join(
+      wt |> select(all_of(key_cols), poll_wt, diff_wt, census),
+      by = key_cols
+    ) |>
+    select(-census.y) |>
+    rename(census = census.x)
+
+  joined
+}
+
+file_list  <- list.files(unw_dir, pattern = "\\.csv$", full.names = FALSE)
+joint_list <- map(file_list, read_and_join_pair)
+names(joint_list) <- tools::file_path_sans_ext(file_list)
+
+joined_dir <- here("output", "joined_comparisons")
+if (!dir_exists(joined_dir)) dir_create(joined_dir)
+
+walk2(
+  joint_list,
+  names(joint_list),
+  ~ write_csv(.x, file = file.path(joined_dir, paste0(.y, ".csv")))
+)
+
+# Function to add cell-level bias reduction stats
+add_cell_bias_stats <- function(fname) {
+  filepath <- file.path(joined_dir, fname)
+  df <- read_csv(filepath, show_col_types = FALSE)
+  
+  df_with_stats <- df %>%
+    mutate(
+      abs_diff_unw = round(abs(diff_unw), 2),
+      abs_diff_wt = round(abs(diff_wt), 2),
+      bias_reduction = round(abs_diff_unw - abs_diff_wt, 2),
+      bias_red_pct = round(100 * (abs_diff_unw - abs_diff_wt) / abs_diff_unw, 2)
+    )
+  
+  write_csv(df_with_stats, filepath)
+  cat("Updated:", fname, "\n")
+  
+  return(df_with_stats)
+}
+
+joined_files <- list.files(joined_dir, pattern = "\\.csv$", full.names = FALSE)
+updated_files <- map(joined_files, add_cell_bias_stats)
+
+cat("\nAll files updated with cell-level bias statistics!\n")
+
+# Summarise bias with clean demographic names
+summarise_bias <- function(fname) {
+  df <- read_csv(file.path(joined_dir, fname), show_col_types = FALSE)
+
+  MAB_unw <- mean(abs(df$diff_unw), na.rm = TRUE)
+  MAB_wt  <- mean(abs(df$diff_wt),  na.rm = TRUE)
+  MAB_unw_w <- sum(abs(df$diff_unw)*(df$census/100), na.rm = TRUE)
+  MAB_wt_w  <- sum(abs(df$diff_wt)*(df$census/100),  na.rm = TRUE)
+
+  # Just keep the filename as-is (with underscores)
+  joint_distribution <- tools::file_path_sans_ext(fname)
+
+  tibble(
+    joint_distribution = joint_distribution,
+    MAB_unw        = round(MAB_unw, 3),
+    MAB_wt         = round(MAB_wt, 3),
+    MAB_reduction  = round(MAB_unw - MAB_wt, 3),
+    MAB_red_pct    = round(100 * (1 - MAB_wt / MAB_unw), 2),
+    MAB_unw_w        = round(MAB_unw_w, 3),
+    MAB_wt_w         = round(MAB_wt_w, 3),
+    MAB_reduction_w  = round(MAB_unw_w - MAB_wt_w, 3),
+    MAB_red_pct_w    = round(100 * (1 - MAB_wt_w / MAB_unw_w), 2)
+  )
+}
+
+summarise_bias <- function(fname) {
+  df <- read_csv(file.path(joined_dir, fname), show_col_types = FALSE)
+
+  MAB_unw <- mean(abs(df$diff_unw), na.rm = TRUE)
+  MAB_wt  <- mean(abs(df$diff_wt),  na.rm = TRUE)
+  MAB_unw_w <- sum(abs(df$diff_unw)*(df$census/100), na.rm = TRUE)
+  MAB_wt_w  <- sum(abs(df$diff_wt)*(df$census/100),  na.rm = TRUE)
+
+  # Extract demographic name
+  joint_name <- tools::file_path_sans_ext(fname)
+  
+  # Option 1: Use lowercase 'x' instead of special character
+  joint_distribution <- str_replace_all(joint_name, "_", " x ")
+  
+  # Option 2: Keep underscores
+  # joint_distribution <- joint_name
+
+  tibble(
+    joint_distribution = joint_distribution,
+    MAB_unw        = round(MAB_unw, 3),
+    MAB_wt         = round(MAB_wt, 3),
+    MAB_reduction  = round(MAB_unw - MAB_wt, 3),
+    MAB_red_pct    = round(100 * (1 - MAB_wt / MAB_unw), 2),
+    MAB_unw_w        = round(MAB_unw_w, 3),
+    MAB_wt_w         = round(MAB_wt_w, 3),
+    MAB_reduction_w  = round(MAB_unw_w - MAB_wt_w, 3),
+    MAB_red_pct_w    = round(100 * (1 - MAB_wt_w / MAB_unw_w), 2)
+  )
+}
+
+bias_summary <- map_dfr(joined_files, summarise_bias)
+bias_summary <- bias_summary %>% arrange(desc(MAB_reduction_w))
+
+print(bias_summary)
+
+
+write_csv(bias_summary, here("output", "bias_summary_with_demographics.csv"))
+
+write_csv(out_comp_df, here("output", "weighting_performance_summary.csv"))
+
+```
+
+
+
+## First four columns are straight averages that do not weight by cell size
+## last four columns are the same quantities, but weighted by cell size
+## if MAB_unw >> MAB_unw_w, then the errors are largely coming from smaller cells
+## if MAB_unw << MAB_unw_w, then the errors are largely coming from larger cells. 
+## same logic holds for MAB_wt and MAB_wt_w. 
+
+
+```
+
+
+
+
+```
+
+
+```{r}
+##The name of the joint distribution the row refers to (e.g. age_ethnicity, religion_education).
+
+##MAB_unw
+
+#Mean Absolute Bias for the UNweighted data.
+
+#It is the average of |diff_unw| across all cells in that joint (e.g. all age × ethnicity combinations).
+
+#Interpreted as: “On average, unweighted cell proportions are this many percentage points away from the census.”​
+
+#MAB_wt
+
+#Mean Absolute Bias for the weighted data.
+
+#It is the average of |diff_wt| across all cells in that joint.
+
+#Interpreted as: “On average, weighted cell proportions are this many percentage points away from the census.”​
+
+#MAB_reduction
+
+#Absolute reduction in mean absolute bias from weighting.
+
+#Computed as MAB_unw − MAB_wt.
+#Interpreted as: “Weighting reduced average bias by this many percentage points.”​
+#Positive = weighting reduced average bias; negative = weighting increased average bias.​
+
+#MAB_red_pct
+
+write.csv(bias_summary, here("output", "bias_summary.csv"), row.names = FALSE)
+
+#Percentage reduction in mean absolute bias.
+
+#Computed as 100 × (1 − MAB_wt / MAB_unw).
+
+#Positive values: percentage improvement; negative values: percentage worsening of bias after weighting.​
+
+
+
+## test 
+
+data_small %>%
+  summarise(
+    percentage = mean(education == "Secondary" & sex == "Female" & age_group == "75+", na.rm = TRUE) * 100,
+    count = sum(education == "Secondary" & sex == "Female" & age_group == "75+", na.rm = TRUE),
+    total = n()
+  )
+
+
+
+data_small %>%
+  summarise(
+    percentage = mean(education == "Secondary" & sex == "Male" & age_group == "25-34", na.rm = TRUE) * 100,
+    count = sum(education == "Secondary" & sex == "Male" & age_group == "25-34", na.rm = TRUE),
+    total = n()
+  )
+
+
+
+data_small %>%
+  summarise(
+    percentage = mean(education == "Vocational" & sex == "Female" & age_group == "55-64", na.rm = TRUE) * 100,
+    count = sum(education == "Vocational" & sex == "Female" & age_group == "55-64", na.rm = TRUE),
+    total = n()
+  )
+
+```
